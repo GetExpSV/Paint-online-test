@@ -5,6 +5,8 @@ import canvasState from '../store/canvasState'
 import toolState from '../store/toolState'
 import Brush from "../tools/Brush";
 import {useParams} from 'react-router-dom'
+import Rect from "../tools/Rect";
+import axios from 'axios'
 
 const Canvas = observer(() => {
     const canvasRef = useRef();
@@ -13,12 +15,24 @@ const Canvas = observer(() => {
 
     useEffect(() => {
         canvasState.setCanvas(canvasRef.current)
-        toolState.setTool(new Brush(canvasRef.current))
+        axios.get(`http://localhost:5000/image?id=${params.id}`)
+            .then(res=> {
+                const img = new Image();
+                img.src = res.data
+                img.onload = () => {
+                    let ctx = canvasRef.current.getContext('2d')
+                    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height)
+                    ctx.drawImage(img, 0, 0, canvasRef.current.width, canvasRef.current.height)
+                }
+            })
     }, [])
 
     useEffect(() => {
         if (canvasState.username) {
             const socket = new WebSocket('ws://localhost:5000/')
+            canvasState.setSocket(socket)
+            canvasState.setSessionId(params.id)
+            toolState.setTool(new Brush(canvasRef.current, socket, params.id))
             socket.onopen = () => {
                 console.log('Подключение установлено')
                 socket.send(JSON.stringify({
@@ -29,14 +43,40 @@ const Canvas = observer(() => {
             }
 
             socket.onmessage = (event) => {
-                console.log(event.data)
+                let msg = JSON.parse(event.data)
+                switch (msg.method) {
+                    case 'connection':
+                        console.log(`Пользователь ${msg.username} подключился`)
+                        break
+                    case 'draw':
+                        drawHandler(msg)
+                        break
+                }
             }
         }
 
     }, [canvasState.username])
 
+    const drawHandler = (msg) => {
+        const figure = msg.figure
+        const ctx = canvasRef.current.getContext('2d')
+        switch(figure.type){
+            case 'brush':
+                Brush.draw(ctx, figure.x, figure.y)
+                break
+            case 'finish':
+                ctx.beginPath()
+                break
+            case 'rect':
+                Rect.staticDraw(ctx, figure.x, figure.y, figure.width, figure.height, figure.color)
+                break
+        }
+    }
+
     const mouseDownHandler = () => {
         canvasState.pushToUndo(canvasRef.current.toDataURL())
+        axios.post(`http://localhost:5000/image?id=${params.id}`, {img: canvasRef.current.toDataURL()})
+            .then(res=> console.log(res.data))
     }
 
     const closeModal = () => {
